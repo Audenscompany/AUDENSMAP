@@ -92,6 +92,7 @@
   .card:hover{border-color:#553d78; transform:translateY(-2px); box-shadow:0 14px 34px rgba(0,0,0,.4)}
   .card .thumb{height:118px; position:relative; background:radial-gradient(120% 120% at 30% 20%, #241833, #17101f); border-bottom:1px solid var(--line); overflow:hidden}
   .card .thumb svg{position:absolute; inset:0; width:100%; height:100%}
+  .card .thumb img.cover{position:absolute; inset:0; width:100%; height:100%; object-fit:cover}
   .card .fav{position:absolute; top:9px; right:9px; width:28px;height:28px; border-radius:8px; display:grid; place-items:center; background:rgba(0,0,0,.35); border:1px solid var(--line); color:var(--ink-mute); font-size:14px; z-index:2}
   .card .fav.on{color:#ffcf4d; border-color:#5a4a1c}
   .card .body{padding:12px 14px 6px}
@@ -308,6 +309,7 @@
 <div id="toast"><span class="ic"></span><span id="toastmsg"></span></div>
 <div id="overlay"><div class="modal" id="modalBox"></div></div>
 <input type="file" id="fileInput" accept="application/json,.json" style="display:none">
+<input type="file" id="coverInput" accept="image/*" style="display:none">
 
 <script>
 /* ============================================================
@@ -358,7 +360,7 @@ function cleanNode(n){
 }
 function serializeDB(){
   const out={order:DB.order.slice(),maps:{}};
-  DB.order.forEach(id=>{ const m=DB.maps[id]; if(!m)return; out.maps[id]={id:m.id,name:m.name,created:m.created,updated:m.updated,fav:!!m.fav,root:cleanNode(m.root)}; if(m._file)out.maps[id]._file=m._file; });
+  DB.order.forEach(id=>{ const m=DB.maps[id]; if(!m)return; out.maps[id]={id:m.id,name:m.name,created:m.created,updated:m.updated,fav:!!m.fav,root:cleanNode(m.root)}; if(m._file)out.maps[id]._file=m._file; if(m.cover)out.maps[id].cover=m.cover; });
   return out;
 }
 let dbT=null;
@@ -585,11 +587,13 @@ function renderLibrary(){
   const nw=document.createElement("div"); nw.className="card new"; nw.innerHTML='<div class="plus">＋</div><span>Novo mapa</span>'; nw.onclick=createFlow; grid.appendChild(nw);
   filt.forEach(id=>{
     const m=DB.maps[id]; const card=document.createElement("div"); card.className="card";
-    card.innerHTML=`<div class="thumb">${thumbSVG(m.root)}<button class="fav ${m.fav?'on':''}" title="Favoritar">${m.fav?'★':'☆'}</button></div>
+    const thumbInner = m.cover ? `<img class="cover" src="${m.cover}" alt="">` : thumbSVG(m.root);
+    card.innerHTML=`<div class="thumb">${thumbInner}<button class="fav ${m.fav?'on':''}" title="Favoritar">${m.fav?'★':'☆'}</button></div>
       <div class="body"><h3>${esc(m.name)}</h3><div class="meta">${countTopics(m.root)} tópicos · ${fmtDate(m.updated)}</div></div>
       <div class="acts">
         <button class="miniact" data-a="open" title="Abrir">Abrir ↗</button>
         <span style="flex:1"></span>
+        <button class="miniact" data-a="cover" title="Capa/foto do mapa">🖼</button>
         <button class="miniact" data-a="rename" title="Renomear">✎</button>
         <button class="miniact" data-a="dup" title="Duplicar">⧉</button>
         <button class="miniact" data-a="export" title="Exportar">↧</button>
@@ -602,6 +606,10 @@ function renderLibrary(){
     card.querySelector('[data-a="rename"]').onclick=async e=>{e.stopPropagation(); const v=await promptModal({title:"Renomear mapa",value:m.name,confirmText:"Salvar"}); if(v!=null&&v.trim()){m.name=v.trim();m.updated=Date.now();saveDB();renderLibrary(); if(dirHandle) renameFolderFile(m).then(saveDB);}};
     card.querySelector('[data-a="dup"]').onclick=e=>{e.stopPropagation(); const id2=newMap(m.name+" (cópia)", cloneRootNewIds(m.root)); toast("Mapa duplicado"); renderLibrary();};
     card.querySelector('[data-a="export"]').onclick=async e=>{e.stopPropagation(); const data=JSON.stringify({name:m.name,root:cleanNode(m.root)},null,2); const fn=(m.name||"mapa").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")+".json"; (await download(fn,data,"application/json"))?toast("Backup exportado"):toast("Não deu pra exportar",true);};
+    card.querySelector('[data-a="cover"]').onclick=async e=>{e.stopPropagation();
+      if(m.cover){ const ch=await chooseModal({title:"Capa do mapa",options:[{id:"change",icon:"🖼",title:"Trocar imagem",desc:"Escolher outra foto"},{id:"remove",icon:"✕",title:"Remover capa",desc:"Voltar pro desenho automático"}]}); if(ch==="remove"){ delete m.cover; m.updated=Date.now(); saveDB(); renderLibrary(); if(dirHandle) writeMapFile(m).then(saveDB); return; } if(ch!=="change") return; }
+      coverTargetId=id; document.getElementById("coverInput").click();
+    };
     card.querySelector('[data-a="del"]').onclick=async e=>{e.stopPropagation(); if(await confirmModal('Excluir o mapa "'+m.name+'"? Isso não tem como desfazer.')){ if(dirHandle) removeMapFile(m); delete DB.maps[id]; DB.order=DB.order.filter(x=>x!==id); saveDB(); renderLibrary(); toast("Mapa excluído"); }};
     grid.appendChild(card);
   });
@@ -622,6 +630,25 @@ async function createFlow(){
 }
 document.getElementById("libNew").onclick=createFlow;
 document.getElementById("heroNew").onclick=createFlow;
+
+/* ---- capa/foto do mapa ---- */
+let coverTargetId=null;
+function imgToThumb(file, cb){
+  try{
+    const img=new Image(), url=URL.createObjectURL(file);
+    img.onload=()=>{ const maxW=560,maxH=320; let w=img.naturalWidth||img.width, h=img.naturalHeight||img.height; const r=Math.min(maxW/w,maxH/h,1); const cw=Math.max(1,Math.round(w*r)), ch=Math.max(1,Math.round(h*r));
+      const c=document.createElement("canvas"); c.width=cw; c.height=ch; const x=c.getContext("2d"); x.drawImage(img,0,0,cw,ch);
+      let data=null; try{ data=c.toDataURL("image/jpeg",0.82); }catch(e){} URL.revokeObjectURL(url); cb(data); };
+    img.onerror=()=>{ URL.revokeObjectURL(url); cb(null); };
+    img.src=url;
+  }catch(e){ cb(null); }
+}
+document.getElementById("coverInput").onchange=e=>{
+  const f=e.target.files&&e.target.files[0]; const id=coverTargetId; e.target.value=""; coverTargetId=null;
+  if(!f||!id||!DB.maps[id]) return;
+  if(!/^image\//.test(f.type)){ toast("Escolha um arquivo de imagem",true); return; }
+  imgToThumb(f, data=>{ if(!data){ toast("Não consegui ler essa imagem",true); return; } const m=DB.maps[id]; m.cover=data; m.updated=Date.now(); saveDB(); renderLibrary(); if(dirHandle) writeMapFile(m).then(saveDB); toast("Capa atualizada"); });
+};
 
 /* ---- importar ---- */
 function doImport(){ document.getElementById("fileInput").click(); }
@@ -661,7 +688,7 @@ let dirHandle=null, pendingHandle=null, fwTimers={};
 function fsSupported(){ return typeof window.showDirectoryPicker==="function"; }
 function slugify(s){ return ((s||"mapa").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,""))||"mapa"; }
 function fileNameFor(m){ return slugify(m.name)+"-"+String(m.id).slice(-5)+".json"; }
-function mapFileJSON(m){ return JSON.stringify({id:m.id,name:m.name,created:m.created,updated:m.updated,fav:!!m.fav,root:cleanNode(m.root)},null,2); }
+function mapFileJSON(m){ const o={id:m.id,name:m.name,created:m.created,updated:m.updated,fav:!!m.fav,root:cleanNode(m.root)}; if(m.cover)o.cover=m.cover; return JSON.stringify(o,null,2); }
 
 /* IndexedDB só pra guardar o handle da pasta entre sessões */
 function idb(){ return new Promise((res,rej)=>{ try{ const r=indexedDB.open("mapasfc",1); r.onupgradeneeded=()=>r.result.createObjectStore("kv"); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }catch(e){ rej(e); } }); }
@@ -690,7 +717,7 @@ async function syncFromFolder(){
           const f=await entry.getFile(); const obj=JSON.parse(await f.text()); const root=obj.root||obj;
           if(!root||!root.children) continue;
           let id=(obj.id&&typeof obj.id==="string")?obj.id:genId();
-          const inc={id,name:obj.name||root.title||"Mapa",created:obj.created||Date.now(),updated:obj.updated||Date.now(),fav:!!obj.fav,root,_file:entry.name};
+          const inc={id,name:obj.name||root.title||"Mapa",created:obj.created||Date.now(),updated:obj.updated||Date.now(),fav:!!obj.fav,root,_file:entry.name}; if(obj.cover)inc.cover=obj.cover;
           const cur=DB.maps[id];
           if(!cur){ DB.maps[id]=inc; if(!DB.order.includes(id)) DB.order.unshift(id); }
           else if((inc.updated||0)>(cur.updated||0)){ DB.maps[id]=Object.assign(cur,inc); }
