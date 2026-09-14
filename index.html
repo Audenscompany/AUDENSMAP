@@ -134,11 +134,22 @@
   .node .note{display:block; margin-top:4px; font-size:11px; font-style:italic; line-height:1.3; color:var(--ink-mute)}
   .editable{outline:none}
   .node.editing .editable{box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--c, var(--purple)) 70%, transparent); border-radius:6px; padding:1px 4px; margin:-1px -4px; background:rgba(0,0,0,.25); cursor:text}
-  .toggle{position:absolute; right:-10px; top:50%; transform:translateY(-50%); width:20px; height:20px; border-radius:50%;
+  .toggle{position:absolute; right:-9px; top:-9px; width:20px; height:20px; border-radius:50%;
     background:var(--bg-2); border:2px solid currentColor; display:flex; align-items:center; justify-content:center;
-    font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:11px; line-height:1; z-index:2; cursor:pointer}
-  .toggle.left{right:auto; left:-10px}
+    font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:11px; line-height:1; z-index:3; cursor:pointer}
+  .toggle.left{right:auto; left:-9px}
   .toggle .lab{color:var(--ink)}
+  /* botões rápidos + alça de redimensionar (só no nó selecionado, via decorateSelected) */
+  .qadd{position:absolute; width:24px; height:24px; padding:0; border-radius:50%; border:2px solid var(--c,var(--purple));
+    background:var(--bg-2); color:var(--ink); font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:16px; line-height:1;
+    display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:5; box-shadow:0 3px 10px rgba(0,0,0,.4)}
+  .qadd:hover{background:var(--c,var(--purple)); color:#12040f}
+  .qadd.child{right:-14px; top:50%; transform:translateY(-50%)}
+  .qadd.child.left{right:auto; left:-14px}
+  .qadd.sib{left:50%; bottom:-14px; transform:translateX(-50%)}
+  .rhandle{position:absolute; right:-7px; bottom:-7px; width:15px; height:15px; border-radius:4px;
+    background:var(--c,var(--purple)); border:2px solid var(--bg-2); cursor:nwse-resize; z-index:5}
+  .rhandle:hover{filter:brightness(1.15)}
   .node.root{max-width:none; text-align:center; padding:18px 28px; --c:#9d5cff;
     background:radial-gradient(120% 140% at 50% 0%, #7b3bff 0%, #5a20b0 55%, #3f1585 100%);
     border:1px solid rgba(190,150,255,.55); box-shadow:0 0 0 6px rgba(120,60,220,.14), 0 18px 44px rgba(80,20,160,.5)}
@@ -355,7 +366,7 @@ let DB={order:[],maps:{}};
 function cleanNode(n){
   const o={id:n.id};
   if(n.title!=null)o.title=n.title; if(n.sub!=null)o.sub=n.sub; if(n.label!=null)o.label=n.label;
-  if(n.q)o.q=true; if(n.note)o.note=n.note; if(n.color)o.color=n.color; if(n.collapsed)o.collapsed=true;
+  if(n.q)o.q=true; if(n.note)o.note=n.note; if(n.color)o.color=n.color; if(n.collapsed)o.collapsed=true; if(n.width)o.width=n.width;
   o.children=(n.children||[]).map(cleanNode); return o;
 }
 function serializeDB(){
@@ -399,6 +410,7 @@ function kindOf(n){ if(n._depth===0)return"root"; if(n._depth===1)return"branch"
 function esc(s){ return (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 function nodeHTML(n){
   const el=document.createElement("div"); el.dataset.id=n.id; const kind=kindOf(n); el.style.setProperty("--c",n._color);
+  if(n.width){ el.style.width=n.width+"px"; el.style.maxWidth="none"; }
   if(kind==="root") el.className="node root", el.innerHTML=`<div class="r-title editable" data-field="title">${esc(n.title)}</div><div class="r-sub editable" data-field="sub">${esc(n.sub)}</div>`;
   else if(kind==="branch") el.className="node branch", el.innerHTML=`<span class="cap"><span class="num">${n._num}</span><span class="txt editable" data-field="label">${esc(n.label)}</span></span>`+(n.note?`<span class="note">${esc(n.note)}</span>`:"");
   else if(kind==="group") el.className="node group", el.innerHTML=`<span class="cap editable" data-field="label">${esc(n.label)}</span>`+(n.note?`<span class="note">${esc(n.note)}</span>`:"");
@@ -410,10 +422,15 @@ function collectVisible(){ const list=[],edges=[]; (function w(n){ list.push(n);
 function subH(n){ if(n.collapsed||n.children.length===0)return n._h+VGAP; let s=0; n.children.forEach(c=>s+=subH(c)); return Math.max(n._h+VGAP,s); }
 function place(n,cx,bt,bh,dir){ n._x=cx; n._y=bt+bh/2; n._sideDir=dir; if(n.collapsed||n.children.length===0)return; let bl=0; n.children.forEach(c=>bl+=subH(c)); let cur=bt+(bh-bl)/2; n.children.forEach(c=>{const ch=subH(c); place(c,cx+dir*(n._w/2+HGAP+c._w/2),cur,ch,dir); cur+=ch;}); }
 let bbox=null;
-function layout(){
-  const {list,edges}=collectVisible();
+let _list=[], _edges=[];
+function layout(){ // rebuild DOM e reposiciona
+  const {list,edges}=collectVisible(); _list=list; _edges=edges;
   [...world.querySelectorAll(".node")].forEach(e=>e.remove());
   list.forEach(n=>{ const el=nodeHTML(n); world.appendChild(el); n._el=el; });
+  positionNodes(); decorateSelected();
+}
+function positionNodes(){ // só mede e reposiciona (reusa os els) — usado no resize
+  const list=_list, edges=_edges;
   list.forEach(n=>{ n._w=n._el.offsetWidth; n._h=n._el.offsetHeight; });
   const br=state.root.children, hs=br.map(subH), tot=hs.reduce((a,b)=>a+b,0);
   let acc=0,split=br.length,best=Infinity; for(let i=1;i<br.length;i++){acc+=hs[i-1]; const d=Math.abs(acc-(tot-acc)); if(d<best){best=d;split=i;}}
@@ -428,6 +445,24 @@ function layout(){
   edgesSvg.innerHTML=paths.join("");
   let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity; list.forEach(n=>{a=Math.min(a,n._x-n._w/2);c=Math.max(c,n._x+n._w/2);b=Math.min(b,n._y-n._h/2);d=Math.max(d,n._y+n._h/2);}); bbox={minX:a,minY:b,maxX:c,maxY:d};
   if(selectedId&&NODES[selectedId]&&NODES[selectedId]._el) NODES[selectedId]._el.classList.add("sel");
+}
+/* botões rápidos (+filho / +irmão) e alça de redimensionar no nó selecionado */
+function decorateSelected(){
+  world.querySelectorAll(".qadd,.rhandle").forEach(e=>e.remove());
+  const n=selectedId?NODES[selectedId]:null; if(!n||!n._el) return; const el=n._el;
+  const child=document.createElement("button"); child.className="qadd child"+(n._sideDir<0?" left":""); child.textContent="＋"; child.title="Adicionar filho";
+  child.onpointerdown=e=>e.stopPropagation(); child.onclick=e=>{ e.stopPropagation(); addChild(n); }; el.appendChild(child);
+  if(n._depth!==0){ const sib=document.createElement("button"); sib.className="qadd sib"; sib.textContent="＋"; sib.title="Adicionar irmão";
+    sib.onpointerdown=e=>e.stopPropagation(); sib.onclick=e=>{ e.stopPropagation(); addSibling(n); }; el.appendChild(sib); }
+  const rh=document.createElement("div"); rh.className="rhandle"; rh.title="Arraste pra redimensionar"; rh.onpointerdown=e=>startResize(e,n); el.appendChild(rh);
+}
+let resizing=false;
+function startResize(e,n){
+  e.stopPropagation(); e.preventDefault(); resizing=true;
+  const startX=e.clientX, startW=n._w, rh=e.currentTarget; try{ rh.setPointerCapture(e.pointerId); }catch(_){}
+  function mv(ev){ const dx=(ev.clientX-startX)/zoom; const w=Math.round(Math.max(130,Math.min(660,startW+dx))); n.width=w; n._el.style.width=w+"px"; n._el.style.maxWidth="none"; positionNodes(); }
+  function up(){ resizing=false; rh.removeEventListener("pointermove",mv); rh.removeEventListener("pointerup",up); touchMap(); }
+  rh.addEventListener("pointermove",mv); rh.addEventListener("pointerup",up);
 }
 
 /* ---- pan/zoom ---- */
@@ -453,7 +488,7 @@ world.addEventListener("click",e=>{
   select(el.dataset.id);
 });
 world.addEventListener("dblclick",e=>{ const el=e.target.closest(".node"); if(!el)return; const f=e.target.closest(".editable"); select(el.dataset.id); startEdit(el.dataset.id, f?f.dataset.field:null); });
-function select(id){ if(selectedId&&NODES[selectedId]&&NODES[selectedId]._el)NODES[selectedId]._el.classList.remove("sel"); selectedId=id; const n=id?NODES[id]:null; if(n&&n._el)n._el.classList.add("sel"); updateActionbar(); }
+function select(id){ if(selectedId&&NODES[selectedId]&&NODES[selectedId]._el)NODES[selectedId]._el.classList.remove("sel"); selectedId=id; const n=id?NODES[id]:null; if(n&&n._el)n._el.classList.add("sel"); decorateSelected(); updateActionbar(); }
 function updateActionbar(){
   const bar=document.getElementById("actionbar"), hint=document.getElementById("hint"), n=selectedId?NODES[selectedId]:null;
   if(!n){ bar.classList.remove("on"); hint.style.display=""; closeColor(); return; }
